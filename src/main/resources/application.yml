@@ -1,0 +1,17 @@
+spring:
+  profiles:
+    active: dev
+  application:
+    name: ems-mail
+  jackson.serialization.indent_output: true
+  thymeleaf:
+    check-template: true
+    encoding: UTF-8
+    mode: HTML5
+server:
+  port: 8888
+  servlet:
+    context-path: /ems-mail
+
+file:
+  folder: D://maindisk/temp
