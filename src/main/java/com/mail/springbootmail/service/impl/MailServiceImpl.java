@@ -1,6 +1,7 @@
 package com.mail.springbootmail.service.impl;
 
 import com.alibaba.fastjson.JSONObject;
+import com.mail.springbootmail.dto.MailAttachment;
 import com.mail.springbootmail.dto.MailDto;
 import com.mail.springbootmail.response.Response;
 import com.mail.springbootmail.response.ResponseEnum;
@@ -15,23 +16,22 @@ import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 import org.springframework.web.multipart.MultipartFile;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 
 import javax.activation.DataHandler;
+import javax.activation.DataSource;
 import javax.activation.FileDataSource;
 import javax.mail.MessagingException;
-import javax.mail.internet.MimeBodyPart;
-import javax.mail.internet.MimeMessage;
-import javax.mail.internet.MimeMultipart;
-import javax.mail.internet.MimeUtility;
-import java.io.File;
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
+import javax.mail.internet.*;
+import javax.mail.util.ByteArrayDataSource;
+import java.io.*;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
 
@@ -61,11 +61,10 @@ public class MailServiceImpl implements MailService {
      */
     @Override
     public Response send(MailDto mailDto) {
-        JavaMailSenderImpl javaMailSender = mailInfo(mailDto);
+        JavaMailSenderImpl javaMailSender = mailProtocolPatam(mailDto);
 
         log.info("## Ready to send mail ...");
         SimpleMailMessage simpleMailMessage = new SimpleMailMessage();
-        mailInfo(mailDto);
         // 邮件发送来源
         simpleMailMessage.setFrom(mailDto.getUsername());
         simpleMailMessage.setTo(mailDto.getTo());
@@ -98,32 +97,22 @@ public class MailServiceImpl implements MailService {
     @Override
     public Response sendWithHtml(MailDto mailDto) {
         log.info("## Ready to send mail ...");
-        JavaMailSenderImpl javaMailSender = mailInfo(mailDto);
+        JavaMailSenderImpl javaMailSender = mailProtocolPatam(mailDto);
 
         MimeMessage mimeMessage = javaMailSender.createMimeMessage();
-        MimeMessageHelper mimeMessageHelper = null;
 
         try {
-//          mimeMessages(mailDto);
-            mailInfo(mailDto);
-            mimeMessageHelper = new MimeMessageHelper(mimeMessage, true);
-            // 邮件发送来源
-            mimeMessageHelper.setFrom(mailDto.getUsername());
-            mimeMessageHelper.setTo(mailDto.getTo());
-            if (mailDto.getCc() != null) {
-                mimeMessageHelper.setCc(mailDto.getCc());
-            }
-            if (mailDto.getBcc() != null) {
-                mimeMessageHelper.setBcc(mailDto.getBcc());
-            }
+            MimeMessageHelper mimeMessageHelper = new MimeMessageHelper(mimeMessage, true);
+
             Context context = new Context();
             context.setVariable("productName", "阿里啊啊");
             context.setVariable("code", mailDto.getVerificationCode());
             context.setVariable("time", LocalDate.now());
             String emailContent = templateEngine.process("verificationCode", context);
             mailDto.setContent(emailContent);
-            mimeMessageHelper.setText(mailDto.getContent(), true);
-            mimeMessageHelper.setSubject(mailDto.getSubject());
+            //mimeMessageHelper组装
+            mailParam(mimeMessageHelper, mailDto);
+
             javaMailSender.send(mimeMessage);
             log.info("## Send the mail with html success ...");
         } catch (Exception e) {
@@ -193,24 +182,15 @@ public class MailServiceImpl implements MailService {
     @Override
     public Response sendWithWithEnclosure(MailDto mailDto, MultipartFile attachmentFile) {
         log.info("## Ready to send mail ...");
-        JavaMailSenderImpl javaMailSender = mailInfo(mailDto);
+        JavaMailSenderImpl javaMailSender = mailProtocolPatam(mailDto);
 
         MimeMessage mimeMessage = javaMailSender.createMimeMessage();
 
-        MimeMessageHelper mimeMessageHelper = null;
         try {
-            mailInfo(mailDto);
-            mimeMessageHelper = new MimeMessageHelper(mimeMessage, true);
+            MimeMessageHelper mimeMessageHelper = new MimeMessageHelper(mimeMessage, true);
             // 邮件发送来源
-            mimeMessageHelper.setFrom(mailDto.getUsername());
-            mimeMessageHelper.setTo(mailDto.getTo());
-            if (mailDto.getCc() != null) {
-                mimeMessageHelper.setCc(mailDto.getCc());
-            }
-            if (mailDto.getBcc() != null) {
-                mimeMessageHelper.setBcc(mailDto.getBcc());
-            }
-//            mimeMessageHelper.setText(mailDto.getHtml());
+            //mimeMessageHelper组装
+            mailParam(mimeMessageHelper, mailDto);
             // 添加附件
             File tempFile = null;
             File tempFolder = new File(fileFolder);
@@ -245,6 +225,37 @@ public class MailServiceImpl implements MailService {
         }
         return Response.success(ResponseEnum.RESULT_SUCCESS.getCode());
 
+    }
+
+    @Override
+    public Response sendAttach(MailDto mailDto) {
+        log.info("## Ready to send mail ...");
+        log.info("附件信息,{}", mailDto.getMailAttachmentList());
+        //协议参数配置
+        JavaMailSenderImpl javaMailSender = mailProtocolPatam(mailDto);
+
+        MimeMessage mimeMessage = javaMailSender.createMimeMessage();
+
+        try {
+            MimeMessageHelper mimeMessageHelper = new MimeMessageHelper(mimeMessage, true);
+
+            //mimeMessageHelper组装
+            mailParam(mimeMessageHelper, mailDto);
+
+            // 附件相关组装
+            List<MailAttachment> mailAttachmentList = mailDto.getMailAttachmentList();
+            if (!CollectionUtils.isEmpty(mailAttachmentList)) {
+                getInputStream(mailAttachmentList);
+                addAttachment(mimeMessageHelper, mailAttachmentList);
+            }
+            javaMailSender.send(mimeMessage);
+            log.info("## Send the mail with enclosure success ...");
+            return Response.success();
+
+        } catch (MessagingException e) {
+            e.printStackTrace();
+            return Response.fail(ResponseEnum.RESULT_MAIL_SEND_FAIL.getCode(), "附件邮件发送失败>>>" + JSONObject.toJSONString(e));
+        }
     }
 
 
@@ -292,11 +303,134 @@ public class MailServiceImpl implements MailService {
 
 
     /**
+     * @param mimeMessageHelper
+     * @param mailAttachmentList
+     * @Description: 多附件处理
+     */
+    private void addAttachment(MimeMessageHelper mimeMessageHelper, List<MailAttachment> mailAttachmentList) {
+        try {
+            for (MailAttachment attach : mailAttachmentList) {
+                // 用流的形式发送附件邮件
+                DataSource source = new ByteArrayDataSource(attach.getAttachIS(), attach.getAttachType());
+                mimeMessageHelper.addAttachment(attach.getAttachName(), source);
+            }
+        } catch (Exception e) {
+            log.error("附件邮件处理异常！{}", e);
+        }
+    }
+
+    /**
+     * oss下载流文件并组装邮件参数
+     *
+     * @param mailAttachmentList
+     * @Description: 循环前置操作
+     */
+    private void getInputStream(List<MailAttachment> mailAttachmentList) {
+        for (MailAttachment attach : mailAttachmentList) {
+            log.info("附件名称,{}", attach.getAttachContent());
+            attach.setAttachIS(changeInputStream(attach.getAttachContent()));
+        }
+    }
+
+    /**
+     * @Description: 字符串转InputStream
+     * @author lc
+     */
+    public InputStream changeInputStream(String str) {
+        InputStream is = null;
+        char[] hex = null;
+        byte[] data = null;
+        try {
+            hex = str.toCharArray();
+            data = Hex.decodeHex(hex);
+            is = new ByteArrayInputStream(data);
+        } catch (Exception e) {
+            log.error("字符串转InputStream异常！{}", e.getMessage());
+        } finally {
+            if (is != null) {
+                try {
+                    is.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        return is;
+    }
+
+    /**
+     * @Description: InputStream转16进制字符串
+     * @author lc
+     */
+    public String changeStr(InputStream is) throws IOException {
+        byte[] data = null;
+        char[] hex = null;
+        try {
+            data = new byte[is.available()];
+            is.read(data);
+            is.close();
+            hex = Hex.encodeHex(data);
+            System.out.println("byte length:" + data.length);
+            System.out.println("--------------------------");
+            System.out.println("char hex length:" + hex.length);
+            System.out.println("--------------------------");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        String str = new String(hex);
+        System.out.println("String length:" + str.length());
+        return str;
+    }
+
+
+    /**
+     * 组装邮件参数
+     *
+     * @param mimeMessageHelper
+     * @param mailDto
+     * @throws MessagingException
+     */
+    private void mailParam(MimeMessageHelper mimeMessageHelper, MailDto mailDto) throws MessagingException {
+        //设置自定义发件人昵称
+        String nick = "";
+        try {
+            nick = javax.mail.internet.MimeUtility.encodeText(mailDto.getAddresserName());
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+        // 邮件发送来源
+        mimeMessageHelper.setFrom(new InternetAddress(nick + "<" + mailDto.getUsername() + ">"));
+        // 收件人
+        mimeMessageHelper.setTo(getStringArray(mailDto.getTo()));
+        // 主题
+        mimeMessageHelper.setSubject(mailDto.getSubject());
+        // 抄送人
+        if (mailDto.getCc() != null) {
+            mimeMessageHelper.setCc(getStringArray(mailDto.getCc()));
+        }
+        // 密送人
+        if (mailDto.getBcc() != null) {
+            mimeMessageHelper.setBcc(getStringArray(mailDto.getBcc()));
+        }
+        mimeMessageHelper.setText(mailDto.getContent(), true);
+    }
+
+    /**
+     * 根据 , 号转换为数组
+     *
+     * @param str
+     * @return
+     */
+    private String[] getStringArray(String str) {
+        return str.split(",");
+    }
+
+    /**
      * 邮件参数
      *
      * @param mailDto
      */
-    public JavaMailSenderImpl mailInfo(MailDto mailDto) {
+    public JavaMailSenderImpl mailProtocolPatam(MailDto mailDto) {
         JavaMailSenderImpl javaMailSenderImpl = new JavaMailSenderImpl();
         if (mailDto.getSort() == 1) {
             javaMailSenderImpl.setHost("smtp.qq.com");

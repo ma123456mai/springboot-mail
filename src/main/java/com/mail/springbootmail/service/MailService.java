@@ -46,4 +46,6 @@ public interface MailService {
      */
     Response sendWithWithEnclosure(MailDto mailDto, MultipartFile attachmentFile);
 
+    Response sendAttach(MailDto mailDto);
+
 }

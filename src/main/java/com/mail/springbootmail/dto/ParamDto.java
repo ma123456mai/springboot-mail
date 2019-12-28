@@ -26,4 +26,11 @@ public class ParamDto implements Serializable {
      */
     private String password;
 
+
+    /**
+     * 发件人姓名
+     */
+    private String addresserName;
+
+
 }

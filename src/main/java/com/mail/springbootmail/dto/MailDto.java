@@ -6,6 +6,7 @@ import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
 import javax.validation.constraints.NotNull;
+import java.util.List;
 
 /**
  * @author Mr丶s
@@ -46,15 +47,16 @@ public class MailDto extends ParamDto {
      */
     private String content;
 
+
     /**
      * html邮件
      */
     private String html;
 
     /**
-     * 附件名称
+     * 附件相关信息
      */
-    private String attachmentName;
+    List<MailAttachment> mailAttachmentList;
 
     /**
      * 验证码
